@@ -1,0 +1,421 @@
+# AI Exam Platform with ICP Face Recognition
+
+A comprehensive online examination platform featuring AI-powered proctoring using Internet Computer Protocol (ICP) for face recognition and blockchain-based certificate verification.
+
+## 🌟 Features
+
+- **ICP-Powered Face Recognition**: Advanced face detection and recognition using ONNX models running on Internet Computer canisters
+- **Real-time Proctoring**: Live monitoring with violation detection and risk assessment
+- **Blockchain Certificates**: Tamper-proof certificates stored on blockchain with verification
+- **Secure Authentication**: JWT-based user authentication system
+- **Multiple Question Types**: Support for multiple-choice and essay questions
+- **Comprehensive Analytics**: Detailed proctoring reports and exam analytics
+
+## 🏗️ Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │   Backend API   │    │   ICP Canister  │
+│   (React/HTML)  │◄──►│   (Node.js)     │◄──►│ (Face Recognition)│
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │   MongoDB       │
+                    │   (Sessions)    │
+                    └─────────────────┘
+```
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Node.js >= 16.0.0
+- Python 3.7+
+- Rust (latest stable)
+- MongoDB
+- DFX (Internet Computer SDK)
+
+### Installation
+
+1. **Clone and setup the project:**
+   ```bash
+   git clone <repository-url>
+   cd ai-exam-platform-icp
+   chmod +x scripts/complete-setup.sh
+   ./scripts/complete-setup.sh
+   ```
+
+2. **Configure environment variables:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+3. **Start the application:**
+   ```bash
+   npm start
+   ```
+
+### Manual Setup (Alternative)
+
+If you prefer manual setup:
+
+1. **Install dependencies:**
+   ```bash
+   npm install
+   pip3 install torch torchvision facenet-pytorch onnx
+   cargo install wasi2ic ic-file-uploader wasm-opt
+   ```
+
+2. **Setup ICP canister:**
+   ```bash
+   dfx start --background
+   dfx deploy face_recognition
+   ```
+
+3. **Upload models:**
+   ```bash
+   # Download models
+   curl -L "https://github.com/onnx/models/raw/main/validated/vision/body_analysis/ultraface/models/version-RFB-320.onnx" -o models/version-RFB-320.onnx
+   
+   # Generate FaceNet model
+   python3 scripts/generate-facenet-model.py
+   
+   # Upload to canister
+   ic-file-uploader face_recognition append_face_detection_model_bytes models/version-RFB-320.onnx
+   ic-file-uploader face_recognition append_face_recognition_model_bytes models/face-recognition.onnx
+   dfx canister call face_recognition setup_models
+   ```
+
+## 🔧 Configuration
+
+### Environment Variables
+
+```env
+# Database
+MONGODB_URI=mongodb://localhost:27017/ai-exam-platform
+JWT_SECRET=your-jwt-secret-key
+
+# ICP Configuration
+FACE_RECOGNITION_CANISTER_ID=your-canister-id
+IC_HOST=https://ic0.app
+NODE_ENV=development
+
+# Blockchain
+CERTIFICATE_CANISTER_ID=your-certificate-canister-id
+
+# Server
+PORT=5000
+```
+
+### ICP Canister Configuration
+
+The face recognition canister supports the following configuration:
+
+- **Face Detection Model**: Ultraface ONNX model (240x320 input)
+- **Face Recognition Model**: FaceNet ONNX model (160x160 input)
+- **Confidence Threshold**: 0.5 for face detection
+- **Similarity Threshold**: 0.7 for face recognition
+
+## 📖 API Documentation
+
+### Authentication Endpoints
+
+#### Register User
+```http
+POST /api/users/register
+Content-Type: application/json
+
+{
+  "name": "John Doe",
+  "email": "john@example.com",
+  "password": "securepassword"
+}
+```
+
+#### Login
+```http
+POST /api/users/login
+Content-Type: application/json
+
+{
+  "email": "john@example.com",
+  "password": "securepassword"
+}
+```
+
+### Exam Endpoints
+
+#### Get All Exams
+```http
+GET /api/exams
+Authorization: Bearer <jwt-token>
+```
+
+#### Start Exam
+```http
+POST /api/exams/:id/start
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+
+{
+  "biodata": {
+    "fullName": "John Doe",
+    "studentId": "12345",
+    "institution": "University"
+  }
+}
+```
+
+#### Submit Exam
+```http
+POST /api/exams/:id/submit
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+
+{
+  "sessionId": "session-id",
+  "answers": [
+    {
+      "questionId": "1",
+      "answer": "4"
+    }
+  ]
+}
+```
+
+### Proctoring Endpoints
+
+#### Register Face
+```http
+POST /api/exams/register-face
+Authorization: Bearer <jwt-token>
+Content-Type: multipart/form-data
+
+faceImage: <image-file>
+studentId: "12345"
+```
+
+#### Process Proctoring Frame
+```http
+POST /api/exams/proctoring/frame
+Authorization: Bearer <jwt-token>
+Content-Type: multipart/form-data
+
+frame: <image-file>
+sessionId: "session-id"
+```
+
+## 🧪 Testing
+
+### Test ICP Integration
+```bash
+npm run icp:integration-test
+```
+
+### Test Canister Health
+```bash
+npm run icp:test
+```
+
+### View Canister Stats
+```bash
+npm run icp:stats
+```
+
+### Manual Testing with DFX
+```bash
+# Test face detection
+dfx canister call face_recognition detect_face '(vec {})'
+
+# Check health
+dfx canister call face_recognition health_check
+
+# Get statistics
+dfx canister call face_recognition get_stats
+```
+
+## 🔍 Proctoring Features
+
+### Violation Detection
+
+The ICP-powered proctoring system detects:
+
+1. **No Face Detected**: Student not visible in camera
+2. **Multiple Persons**: More than one person detected
+3. **Identity Mismatch**: Different person from registered face
+4. **Looking Away**: Student looking away from screen
+5. **System Errors**: Technical issues during analysis
+
+### Risk Assessment
+
+- **Low Risk (0-2)**: PASS - Normal exam completion
+- **Medium Risk (2-5)**: FLAG - Requires review
+- **High Risk (5+)**: REVIEW_REQUIRED - Manual verification needed
+
+## 🏅 Certificate System
+
+### Certificate Generation
+- Automatic generation for passed exams with low proctoring risk
+- Blockchain-based storage with tamper-proof verification
+- Unique certificate IDs with verification URLs
+
+### Certificate Verification
+```http
+GET /api/exams/certificate/:certificateId/verify
+```
+
+### Certificate Details
+```http
+GET /api/exams/certificate/:certificateId
+```
+
+## 🛠️ Development
+
+### Project Structure
+```
+├── controllers/           # API controllers
+├── models/               # MongoDB models
+├── routes/               # Express routes
+├── services/             # Business logic services
+├── middleware/           # Express middleware
+├── src/face_recognition/ # ICP canister source
+├── models/               # ONNX model files
+├── scripts/              # Setup and utility scripts
+└── public/               # Static files
+```
+
+### Adding New Features
+
+1. **Backend**: Add controllers, routes, and services
+2. **ICP Canister**: Modify Rust code in `src/face_recognition/`
+3. **Database**: Update MongoDB models
+4. **Frontend**: Create React components (if using React frontend)
+
+### ICP Canister Development
+
+1. **Modify Rust code** in `src/face_recognition/lib.rs`
+2. **Update Candid interface** in `src/face_recognition/face_recognition.did`
+3. **Deploy changes**:
+   ```bash
+   dfx deploy face_recognition
+   ```
+
+## 🔒 Security Considerations
+
+### Face Recognition Security
+- Face embeddings stored securely in canister memory
+- Similarity thresholds prevent spoofing attempts
+- Real-time violation detection with risk scoring
+
+### Data Protection
+- JWT tokens for secure authentication
+- Encrypted communication with ICP canisters
+- Secure file upload handling with validation
+
+### Blockchain Security
+- Immutable certificate storage
+- Hash-based integrity verification
+- Decentralized verification system
+
+## 📊 Monitoring and Analytics
+
+### Canister Metrics
+```bash
+# View canister statistics
+dfx canister call face_recognition get_stats
+
+# Monitor canister logs
+dfx canister logs face_recognition
+```
+
+### Application Metrics
+- Exam completion rates
+- Proctoring violation statistics
+- Certificate generation rates
+- User engagement analytics
+
+## 🚨 Troubleshooting
+
+### Common Issues
+
+#### 1. Canister Not Responding
+```bash
+# Restart dfx
+dfx stop
+dfx start --clean --background
+dfx deploy face_recognition
+```
+
+#### 2. Models Not Loading
+```bash
+# Re-upload models
+dfx canister call face_recognition clear_face_detection_model_bytes
+dfx canister call face_recognition clear_face_recognition_model_bytes
+./scripts/upload-models.sh
+```
+
+#### 3. Face Recognition Failing
+- Check image quality and lighting
+- Ensure face is clearly visible and centered
+- Verify model files are correctly uploaded
+
+#### 4. Certificate Generation Issues
+- Check blockchain service initialization
+- Verify passing scores and proctoring thresholds
+- Review exam session data
+
+### Debug Commands
+```bash
+# Check canister status
+dfx canister status face_recognition
+
+# View canister info
+dfx canister info face_recognition
+
+# Test with sample image
+dfx canister call face_recognition detect_face "(vec {$(xxd -p -c 256 test-image.jpg | tr -d '\n' | sed 's/../0x&;/g' | sed 's/;$//' | sed 's/;/ : nat8; /g') : nat8})"
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new features
+5. Submit a pull request
+
+### Development Setup
+```bash
+# Install development dependencies
+npm install --dev
+
+# Start development server
+npm run dev
+
+# Run tests
+npm test
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [DFINITY Foundation](https://dfinity.org/) for Internet Computer Protocol
+- [Ultraface](https://github.com/onnx/models/tree/main/validated/vision/body_analysis/ultraface) for face detection model
+- [FaceNet-PyTorch](https://github.com/timesler/facenet-pytorch) for face recognition model
+- [Tract](https://github.com/sonos/tract) for ONNX inference engine
+
+## 📞 Support
+
+For support and questions:
+- Create an issue on GitHub
+- Check the [documentation](docs/)
+- Contact the development team
+
+---
+
+**Note**: This system is designed for educational and professional examination purposes. Ensure compliance with local privacy laws and institutional policies when deploying in production environments.
