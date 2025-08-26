@@ -3,21 +3,29 @@ const ExamSession = require('../models/ExamSession');
 const AIProctoringService = require('../services/aiProctoringService');
 const BlockchainService = require('../services/blockchainService');
 const multer = require('multer');
-const icpFaceRecognition = require('../services/icpFaceRecognitionService');
+const fs = require('fs'); // Import the 'fs' module
+const path = require('path'); // Import the 'path' module
+const { exec } = require('child_process');
+
 
 // Initialize services
 const aiProctoring = new AIProctoringService();
 const blockchain = new BlockchainService();
 
-// Initialize services
+// Initialize services with better error handling
 (async () => {
-    await blockchain.init();
-    // Test ICP connection on startup
-    const connectionTest = await aiProctoring.testConnection();
-    if (connectionTest.success) {
-        console.log('✅ ICP Face Recognition Service connected successfully');
-    } else {
-        console.warn('⚠️ ICP Face Recognition Service connection failed:', connectionTest.message);
+    try {
+        await blockchain.init();
+        console.log('✅ Blockchain service initialized');
+        
+        const connectionTest = await aiProctoring.testConnection();
+        if (connectionTest.success) {
+            console.log('✅ ICP Face Recognition Service connected successfully');
+        } else {
+            console.warn('⚠️ ICP Face Recognition Service connection failed:', connectionTest.message);
+        }
+    } catch (error) {
+        console.error('❌ Service initialization failed:', error);
     }
 })();
 
@@ -35,6 +43,19 @@ const upload = multer({
         }
     }
 });
+
+// Create a directory to store uploaded images if it doesn't exist
+const uploadDir = path.join(__dirname, '../uploads/face-registrations');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Simpan file yang diterima
+const saveFile = (buffer, filename) => {
+    const filePath = path.join(__dirname, '../uploads/face-registrations', filename);
+    fs.writeFileSync(filePath, buffer);
+    return filePath;
+};
 
 exports.getAllExams = async (req, res) => {
     try {
@@ -87,7 +108,7 @@ exports.createExam = async (req, res) => {
             duration: duration || 60,
             passingScore: passingScore || 70,
             creator: req.user ? req.user.userId : null,
-            requiresProctoring: true, // Enable ICP proctoring by default
+            requiresProctoring: true,
             proctoringType: 'ICP_FACE_RECOGNITION'
         });
         
@@ -186,49 +207,106 @@ exports.getExamById = async (req, res) => {
 exports.registerFace = [upload.single('faceImage'), async (req, res) => {
     try {
         if (!req.file) {
-            return res.status(400).json({
-                success: false,
-                message: 'Face image is required for ICP registration'
-            });
+            return res.status(400).json({ success: false, message: 'Face image is required.' });
         }
 
         const { studentId } = req.body;
-        const userId = req.user.userId;
+        const registrationId = studentId || req.user.userId;
 
-        console.log(`Registering face for student ${studentId || userId} using ICP`);
-
-        // Use studentId if provided, otherwise use logged-in user ID
-        const targetStudentId = studentId || userId;
+        // Simpan gambar yang diunggah ke folder lokal
+        const filename = `${registrationId}-${Date.now()}.jpg`;
+        const filePath = saveFile(req.file.buffer, filename);
         
-        const result = await aiProctoring.registerStudentFace(req.file.buffer, targetStudentId);
+        console.log(`Image saved to: ${filePath}`);
 
-        if (result.success) {
-            console.log(`✅ Face registered successfully for student ${targetStudentId} via ICP`);
-        }
+        // Panggil skrip Python untuk memproses gambar
+        const pythonScriptPath = path.join(__dirname, '../scriptsss/new_face_recognizer.py');
+        
+        exec(`python ${pythonScriptPath} "${filePath}"`, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Python script error: ${error.message}`);
+                return res.status(500).json({ success: false, message: 'Failed to process image.' });
+            }
 
-        res.json({
-            ...result,
-            icpEnabled: true,
-            canisterId: process.env.FACE_RECOGNITION_CANISTER_ID
+            if (stderr) {
+                console.error(`Python script stderr: ${stderr}`);
+            }
+
+            try {
+                const result = JSON.parse(stdout);
+                if (!result.success) {
+                    // Hapus file jika pengenalan gagal
+                    fs.unlinkSync(filePath);
+                    return res.status(400).json({ success: false, message: result.message });
+                }
+
+                // Jika berhasil, kirim respons ke frontend
+                const faceResult = result.faces[0]; // Asumsi satu wajah
+                console.log(`Face recognized: ${faceResult.name} with confidence ${faceResult.confidence}`);
+
+                // Anda bisa menyimpan informasi ini ke database
+                // ...
+
+                return res.json({
+                    success: true,
+                    message: 'Face registered and recognized successfully.',
+                    faceData: faceResult
+                });
+
+            } catch (jsonError) {
+                console.error('Failed to parse Python output:', jsonError);
+                return res.status(500).json({ success: false, message: 'Invalid response from AI service.' });
+            }
         });
+
     } catch (error) {
-        console.error('ICP Face registration error:', error);
+        console.error('Registration failed:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to register face with ICP',
-            error: error.message,
-            icpEnabled: true
+            message: 'An error occurred during face registration.',
+            error: error.message
         });
     }
 }];
 
 exports.startExam = async (req, res) => {
     try {
-        const { biodata } = req.body;
+        // Handle both formats: direct biodata fields or nested biodata object
+        const biodata = {
+            fullName: req.body.fullName || req.body.biodata?.fullName,
+            studentId: req.body.studentId || req.body.biodata?.studentId,
+            phoneNumber: req.body.phoneNumber || req.body.biodata?.phoneNumber
+        };
+
+        console.log("📩 startExam biodata:", biodata);
+
+        if (!biodata.fullName || !biodata.studentId) {
+            return res.status(400).json({
+                success: false,
+                message: "Missing required biodata (fullName and studentId)"
+            });
+        }
+
         const exam = await Exam.findById(req.params.id);
         
         if (!exam) {
-            // If exam not found, use sample exam with ICP proctoring
+            // Create session with sample exam
+            const session = new ExamSession({
+                exam: req.params.id,
+                user: req.user.userId,
+                startTime: new Date(),
+                status: 'in-progress',
+                biodata: biodata,
+                proctoring: {
+                    violations: [],
+                    warningCount: 0,
+                    proctoringType: 'ICP_FACE_RECOGNITION',
+                    icpCanisterId: process.env.FACE_RECOGNITION_CANISTER_ID
+                }
+            });
+            
+            await session.save();
+
             const sampleExam = {
                 _id: req.params.id,
                 title: 'Sample Mathematics Test',
@@ -271,23 +349,6 @@ exports.startExam = async (req, res) => {
                 ]
             };
 
-            // Create session with ICP proctoring data
-            const session = new ExamSession({
-                exam: req.params.id,
-                user: req.user.userId,
-                startTime: new Date(),
-                status: 'in-progress',
-                biodata: biodata,
-                proctoring: {
-                    violations: [],
-                    warningCount: 0,
-                    proctoringType: 'ICP_FACE_RECOGNITION',
-                    icpCanisterId: process.env.FACE_RECOGNITION_CANISTER_ID
-                }
-            });
-            
-            await session.save();
-
             return res.json({ 
                 success: true,
                 message: 'Sample exam started with ICP AI proctoring active',
@@ -300,7 +361,7 @@ exports.startExam = async (req, res) => {
             });
         }
 
-        // Check if user already has an active session
+        // Check for existing active session
         const existingSession = await ExamSession.findOne({
             exam: exam._id,
             user: req.user.userId,
@@ -313,6 +374,7 @@ exports.startExam = async (req, res) => {
                 message: 'Exam session already active with ICP proctoring',
                 sessionId: existingSession._id,
                 exam: exam,
+                startTime: existingSession.startTime,
                 proctoringEnabled: true,
                 icpEnabled: true,
                 canisterId: process.env.FACE_RECOGNITION_CANISTER_ID
@@ -369,6 +431,13 @@ exports.processProctoringFrame = [upload.single('frame'), async (req, res) => {
 
         const { sessionId } = req.body;
         
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Session ID is required'
+            });
+        }
+        
         console.log(`Processing frame for session ${sessionId} via ICP`);
         
         const analysis = await aiProctoring.analyzeFrame(req.file.buffer, sessionId);
@@ -377,16 +446,16 @@ exports.processProctoringFrame = [upload.single('frame'), async (req, res) => {
         if (analysis.violations && analysis.violations.length > 0) {
             const session = await ExamSession.findById(sessionId);
             if (session) {
-                // Add sessionId to violations before storing
                 const violationsWithSession = analysis.violations.map(violation => ({
                     ...violation,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    timestamp: new Date()
                 }));
                 
                 session.proctoring.violations.push(...violationsWithSession);
                 session.proctoring.warningCount = session.proctoring.violations.length;
                 session.proctoring.lastAnalysis = {
-                    timestamp: analysis.timestamp,
+                    timestamp: analysis.timestamp || new Date(),
                     faceDetected: analysis.faceDetected,
                     faceCount: analysis.faceCount,
                     confidence: analysis.confidence,
@@ -420,35 +489,21 @@ exports.processProctoringFrame = [upload.single('frame'), async (req, res) => {
     }
 }];
 
-// Add this to your existing submitExam function
 exports.submitExam = async (req, res) => {
     try {
-        const { answers, sessionId, faceImage } = req.body;
+        const { answers, sessionId } = req.body;
         
-        // Verify face presence in the image
-        if (faceImage) {
-            const imageBuffer = Buffer.from(faceImage, 'base64');
-            const faceDetection = await icpFaceRecognition.detectFace(imageBuffer);
-            
-            if (!faceDetection.faceDetected) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'No face detected in the image'
-                });
-            }
-
-            if (faceDetection.faceCount > 1) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Multiple faces detected in the image'
-                });
-            }
-        }
-
         if (!answers || !Array.isArray(answers)) {
             return res.status(400).json({ 
                 success: false,
-                message: 'Invalid answers format' 
+                message: 'Invalid answers format - expected array' 
+            });
+        }
+
+        if (!sessionId) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Session ID is required' 
             });
         }
 
@@ -521,7 +576,7 @@ exports.submitExam = async (req, res) => {
                 } else if (question.type === 'essay') {
                     // Basic essay scoring - give points if substantial answer
                     if (userAnswer.answer.trim().length > 20) {
-                        totalScore += Math.floor(questionPoints * 0.8); // 80% for basic essay completion
+                        totalScore += Math.floor(questionPoints * 0.8);
                     }
                 }
             }
@@ -530,12 +585,13 @@ exports.submitExam = async (req, res) => {
         const finalScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
 
         // Get ICP proctoring report
-        const proctoringReport = aiProctoring.getProctoringReport(sessionId);
+        const proctoringReport = await aiProctoring.getProctoringReport(sessionId);
 
         // Adjust score based on ICP proctoring violations
         let adjustedScore = finalScore;
-        if (proctoringReport.riskScore > 3) {
-            adjustedScore = Math.max(0, finalScore - (proctoringReport.riskScore * 5));
+        const riskScore = proctoringReport?.riskScore || 0;
+        if (riskScore > 3) {
+            adjustedScore = Math.max(0, finalScore - (riskScore * 5));
         }
 
         // Update session with answers and score
@@ -543,8 +599,8 @@ exports.submitExam = async (req, res) => {
         session.score = adjustedScore;
         session.status = 'completed';
         session.completedAt = new Date();
-        session.proctoring.riskScore = proctoringReport.riskScore;
-        session.proctoring.recommendation = proctoringReport.recommendation;
+        session.proctoring.riskScore = riskScore;
+        session.proctoring.recommendation = proctoringReport?.recommendation || 'PASS';
         session.proctoring.finalReport = {
             ...proctoringReport,
             icpProcessed: true,
@@ -555,7 +611,7 @@ exports.submitExam = async (req, res) => {
 
         // Generate certificate if passed and low risk
         let certificateResult = null;
-        if (adjustedScore >= (exam.passingScore || 70) && proctoringReport.riskScore < 3) {
+        if (adjustedScore >= (exam.passingScore || 70) && riskScore < 3) {
             certificateResult = await blockchain.createCertificate(
                 {
                     examTitle: exam.title,
@@ -568,7 +624,7 @@ exports.submitExam = async (req, res) => {
                 session.biodata
             );
 
-            if (certificateResult.success) {
+            if (certificateResult?.success) {
                 session.certificateId = certificateResult.certificateId;
                 await session.save();
             }
@@ -578,7 +634,7 @@ exports.submitExam = async (req, res) => {
             sessionId: session._id,
             score: adjustedScore,
             originalScore: finalScore,
-            proctoringRisk: proctoringReport.riskScore,
+            proctoringRisk: riskScore,
             certificateGenerated: !!certificateResult?.success,
             icpCanisterId: process.env.FACE_RECOGNITION_CANISTER_ID
         });
@@ -602,7 +658,8 @@ exports.submitExam = async (req, res) => {
         console.error('Submit exam error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to submit exam'
+            message: 'Failed to submit exam',
+            error: error.message
         });
     }
 };
@@ -657,11 +714,12 @@ exports.getExamResult = async (req, res) => {
 
         // Format the result data
         const result = {
+            success: true,
             score: session.score,
             passingScore: exam.passingScore || 70,
             passed: session.score >= (exam.passingScore || 70),
             questions: exam.questions.map((q) => {
-                const userAnswer = session.answers.find(a => a.questionId === q._id.toString());
+                const userAnswer = session.answers?.find(a => a.questionId === q._id.toString());
                 return {
                     question: q.question,
                     userAnswer: userAnswer ? userAnswer.answer : 'No answer',
@@ -721,7 +779,7 @@ exports.getCertificate = async (req, res) => {
         const { certificateId } = req.params;
         const result = await blockchain.getCertificate(certificateId);
         
-        if (result.success) {
+        if (result?.success) {
             res.json({
                 success: true,
                 certificate: {
@@ -730,7 +788,10 @@ exports.getCertificate = async (req, res) => {
                 }
             });
         } else {
-            res.status(404).json(result);
+            res.status(404).json({
+                success: false,
+                message: 'Certificate not found'
+            });
         }
     } catch (error) {
         console.error('Get certificate error:', error);
@@ -742,7 +803,7 @@ exports.getCertificate = async (req, res) => {
     }
 };
 
-// Train AI model (now uploads models to ICP canister)
+// Train AI model
 exports.trainAIModel = async (req, res) => {
     try {
         const result = await aiProctoring.trainModel();
@@ -761,7 +822,7 @@ exports.trainAIModel = async (req, res) => {
     }
 };
 
-// Test ICP connection (admin function)
+// Test ICP connection
 exports.testICPConnection = async (req, res) => {
     try {
         const result = await aiProctoring.testConnection();
