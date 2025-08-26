@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "src/face_recognition"
+]
+resolver = "2"
+
+[workspace.dependencies]
+candid = "0.10.17"
+ic-cdk = "0.13.1"
