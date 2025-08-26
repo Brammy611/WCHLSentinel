@@ -1,23 +1,17 @@
 {
     "version": 1,
     "canisters": {
-      "face_recognition": {
-        "type": "rust",
-        "package": "face_recognition",
-        "candid": "src/face_recognition/face_recognition.did"
-      },
-      "face_recognition_assets": {
-        "type": "assets",
-        "source": [
-          "dist/face_recognition/"
-        ]
-      }
+    "face_recognition": {
+      "type": "custom",
+      "candid": "src/face_recognition/face_recognition.did",
+      "wasm": "target/wasm32-wasip1/release/face_recognition.wasm",
+      "build": "cargo build --target wasm32-wasip1 --release"
+    }
     },
     "defaults": {
-      "build": {
-        "args": "",
-        "packtool": ""
-      }
+    "build": {
+      "output": "wasm"
+    }
     },
     "output_env_file": ".env",
     "networks": {
