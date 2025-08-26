@@ -1,3 +1,4 @@
+// examRoutes.js
 const express = require('express');
 const router = express.Router();
 const { 
@@ -8,21 +9,44 @@ const {
     submitExam,
     getExamHistory,
     getCertificate,
-    verifyCertificate 
+    verifyCertificate,
+    registerFace, // Pastikan ini ada
+    testICPConnection,
+    processProctoringFrame
 } = require('../controllers/examController');
-const auth = require('../middleware/auth');
-const verifyFace = require('../middleware/faceVerification');
 
-// Public routes
-router.get('/', auth, getAllExams);
+const auth = require('../middleware/auth');
+// const verifyFace = require('../middleware/faceVerification'); // Hapus atau nonaktifkan ini
+
+/**
+ * ===============================
+ * Public & Authenticated Routes
+ * ===============================
+ */
+
+// Pendaftaran wajah menggunakan multer
+router.post('/registerFace', auth, registerFace);
+
+// Rute ujian
+router.post('/:id/start', auth, startExam);
+router.post('/:id/submit', auth, submitExam);
+router.post('/create', auth, createExam);
 router.get('/history', auth, getExamHistory);
 router.get('/:id', auth, getExamById);
+router.post('/proctoring/frame', auth, processProctoringFrame);
+
+// Rute sertifikat
 router.get('/certificate/:id', getCertificate);
 router.get('/verify/:id', verifyCertificate);
 
-// Protected routes with face verification
-router.post('/:id/start', auth, verifyFace, startExam);
-router.post('/:id/submit', auth, verifyFace, submitExam);
-router.post('/create', auth, createExam);
+// Rute servis mock (jika masih digunakan)
+router.post('/services/icpFaceRecognitionService', auth, (req, res) => {
+    // ...
+});
+router.post('/services/aiProctoringService', auth, (req, res) => {
+    // ...
+});
+
+router.get('/icp/test', auth, testICPConnection);
 
 module.exports = router;
